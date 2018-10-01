@@ -1,176 +1,136 @@
 import React from 'react';
-import React3 from 'react-three-renderer';
 import {
-  Vector2,
   Vector3,
-  Raycaster,
-  Euler,
-  Object3D,
+  PerspectiveCamera,
 } from 'three';
-
-function getFirstIntersection(mouseEvent, object, camera) {
-  const { clientX, clientY } = mouseEvent;
-
-  const { innerWidth, innerHeight } = window;
-
-  const mouseVector = new Vector2();
-  mouseVector.set(
-    ((clientX / innerWidth) * 2) - 1,
-    -((clientY / innerHeight) * 2) + 1,
-  );
-
-  const raycaster = new Raycaster();
-  raycaster.setFromCamera(mouseVector, camera);
-  
-  const intersections = raycaster.intersectObject(object);
-  if (intersections.length > 0) {
-    return intersections[0];
-  }
-
-  return null;
-}
-
-function uvToWorldCoord(object, [u, v]) {
-  if (!object) {
-    return new Vector3();
-  }
-  const { width, height } = object.geometry.parameters;
-  const point = new Vector3(
-    (u - 0.5) * width,
-    (v - 0.5) * height,
-  );
-  point.applyMatrix4(object.matrix);
-  return point;
-}
-
-function vec3ToScreenCoord(point, camera) {
-  if (!camera || !point) {
-    return { x: 0, y: 0 };
-  }
-  const { innerWidth, innerHeight } = window;
-  const projected = new Vector3;
-  projected.copy(point)
-  projected.project(camera);
-  const windowCoord = {
-    x: ((projected.x + 1) / 2) * innerWidth,
-    y: -((projected.y - 1) / 2) * innerHeight,
-  };
-  return windowCoord;
-}
-
-function cornersToQuad([xa, ya], [xb, yb]) {
-  const minX = Math.min(xa, xb);
-  const maxX = Math.max(xa, xb);
-  const minY = Math.min(ya, yb);
-  const maxY = Math.max(ya, yb);
-  return [
-    [minX, minY],
-    [maxX, minY],
-    [maxX, maxY],
-    [minX, maxY],
-  ];
-}
+import {
+  ORIGIN,
+  RIGHT,
+  UP,
+  randomVector,
+  intersection,
+  copy,
+  vec3ToScreenCoord,
+} from './utils';
+import { Vector } from './components';
 
 export default class App extends React.PureComponent {
+  constructor() {
+    super();
+    this.camera = new PerspectiveCamera(
+      75,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      1000,
+    );
 
-  state = {
-    planeRotation: new Euler(0, Math.PI / 4, 0),
-    // planeRotation: new Euler(0, 0, 0),
-    mouseIntersection: new Vector3(),
-    cameraPosition: new Vector3(0, 0, 5),
-    rectCorners: [
-      [0.5, 0.5],
-      [0.6, 0.6],
-    ],
-    points3D: [],
-  }
-
-  onMouseMove = (mouseEvent) => {
-    const intersection = getFirstIntersection(mouseEvent, this.targetObject, this.camera);
-    if (intersection) {
-      const { x, y } = intersection.uv;
-      this.setState({
-        rectCorners: [
-          [0.5, 0.5],
-          [x, y],
-        ],
-      });
+    this.camera.position.set(0, 0, 5);
+    this.camera.getWorldPosition();
+    this.state = {
+      vectors: [
+        {
+          origin: new Vector3(),
+          direction: RIGHT,
+        },
+        {
+          origin: randomVector().multiplyScalar((Math.random() * 2) + 2),
+          direction: randomVector(),
+        },
+      ]
     }
   }
 
-  componentDidMount() {
-    this.targetObject = this.scene.children.find((object) => object.name === 'target');
+  onMouseMove = ({ clientX, clientY }) => {
+    const mouseVector3 = new Vector3(
+      ((clientX / window.innerWidth) * 2) - 1,
+      -((clientY / window.innerHeight) * 2) + 1,
+      0,
+    );
+    const vectors = this.state.vectors.slice();
+    vectors[0].direction = mouseVector3.normalize();
+    this.setState({ vectors });
+  }
+
+  onClick = () => {
+    const vectors = this.state.vectors.slice();
+    vectors[1].origin = randomVector().multiplyScalar((Math.random() * 2) + 2);
+    vectors[1].direction = randomVector();
+    this.setState({ vectors });
+  }
+
+  renderBasisVectors() {
+    return [
+      <Vector
+        key="basisVectorX"
+        start={vec3ToScreenCoord(ORIGIN, this.camera)}
+        end={vec3ToScreenCoord(RIGHT, this.camera)}
+        style={{
+          stroke: 'red',
+        }}
+      />,
+      <Vector
+        key="basisVectorY"
+        start={vec3ToScreenCoord(ORIGIN, this.camera)}
+        end={vec3ToScreenCoord(UP, this.camera)}
+        style={{
+          stroke: 'green',
+        }}
+      />
+    ]
+  }
+
+  renderIntersection() {
+    const [a, b] = this.state.vectors;
+
+    const c = intersection(a.origin, a.direction, b.origin, b.direction);
+    const crossProduct = copy(a.direction).cross(b.direction)
+    const isExternalEdge = crossProduct.z > 0;
+
+    const arrowProps = {
+      key: 'intersection',
+      start: vec3ToScreenCoord(new Vector3(), this.camera),
+      end: vec3ToScreenCoord(c, this.camera),
+      style: { 
+        stroke: isExternalEdge ? 'magenta' : 'cyan',
+      }
+    }
+    return <Vector {...arrowProps} />
+  }
+
+  renderVectors() {
+    return this.state.vectors.map(({origin, direction }, i) => {
+      const start = vec3ToScreenCoord(origin, this.camera);
+      const end = vec3ToScreenCoord(copy(origin).add(direction), this.camera);
+      const arrowProps = {
+        start,
+        end,
+        key: `arrow${i}`,
+      };
+      
+      return <Vector {...arrowProps} />;
+    })
   }
   
   render() {
-    const { rectCorners } = this.state;
-    const [cornerA, cornerB] = rectCorners;
-    const { innerWidth, innerHeight } = window;
-    const points = [];
-    const uvQuad = cornersToQuad(cornerA, cornerB);
-    const points3D = uvQuad.map((point) => {
-      return uvToWorldCoord(this.targetObject, point);
-    });
-    const points2D = points3D.map((point) => {
-      return vec3ToScreenCoord(point, this.camera);
-    });
-    const pointString = points2D.reduce((string, { x, y }) => {
-      return `${string} ${x},${y}`
-    }, '');
-
     return (
-      <div
+      <svg
         onMouseMove={this.onMouseMove}
+        onClick={this.onClick}
         style={{
-          innerWidth,
-          innerHeight,
+          position: 'absolute',
+          width: window.innerWidth,
+          height: window.innerHeight,
+          backgroundColor: '#333',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
         }}
       >
-        <React3
-          mainCamera="camera"
-          width={innerWidth}
-          height={innerHeight}
-        >
-          <scene ref={(scene) => this.scene = scene}>
-            <perspectiveCamera
-              name="camera"
-              ref={(camera) => this.camera = camera}
-              fov={75}
-              aspect={innerWidth / innerHeight}
-              near={0.1}
-              far={1000}
-              position={this.state.cameraPosition}
-            />
-            <mesh
-              name="target"
-              rotation={this.state.planeRotation}
-            >
-              <planeGeometry
-                width={5}
-                height={5}
-              />
-              <meshBasicMaterial 
-                color={0xffffff} 
-              />
-            </mesh>
-          </scene>
-        </React3>
-        <svg
-          style={{
-            position: 'absolute',
-            width: innerWidth,
-            height: innerHeight,
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-          }}
-        >
-          <polygon
-            points={pointString}
-          />
-        </svg>
-      </div>
+        {this.renderBasisVectors()}
+        {this.renderVectors()}
+        {this.renderIntersection()}
+      </svg>
     );
   }
 }
